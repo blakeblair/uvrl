@@ -1,0 +1,23 @@
+{
+    "steam_apps":
+    {
+        "438100": {"name": "VRChat", "tags": ["platform", "social"]},
+        "661130": {"name": "ChilloutVR", "tags": ["platform", "social"]},
+        "2519830": {"name": "Resonite", "tags": ["platform", "social"]},
+        "740250": {"name": "NeosVR", "tags": ["platform", "social"]},
+        "546560": {"name": "Half-Life: Alyx", "tags": ["game"]},
+
+        "2677750": {"name": "OyasumiVR", "tags": ["overlay"]},
+        "1173510": {"name": "XS Overlay", "tags": ["overlay"]},
+        "1068820": {"name": "OVR Toolkit", "tags": ["overlay"]},
+        "1506540": {"name": "OpenVR Space Calibrator", "tags": ["tracking"]}
+    },
+    "native_apps":
+    {
+
+    },
+    "portable_apps":
+    {
+
+    }
+}
