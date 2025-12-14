@@ -9,6 +9,7 @@ from app.steam_discovery import (
     steam_apps_to_discovered,
     #filter_related_apps,
 )
+from app.util import json_to_dict, read_file_as_text
 
 # -------------------------
 # Data model
@@ -133,7 +134,7 @@ def discover_steam_apps(authoritative: bool = True) -> list[DiscoveredApp]:
     discovered = steam_apps_to_discovered(steam_apps)
 
     if authoritative:
-        return filter_related_apps(discovered)
+        return filter_steam_apps(discovered)
 
     return discovered
 
@@ -142,11 +143,12 @@ def discover_steam_apps(authoritative: bool = True) -> list[DiscoveredApp]:
 # Unified discovery entrypoint
 # -------------------------
 
-def filter_related_apps(apps: list[DiscoveredApp]) -> list[DiscoveredApp]:
-    """
-    Authoritative Steam-only filter for initial launcher population.
-    Keeps only Steam apps listed in STEAMAPPS.
-    """
+def filter_steam_apps(apps: list[DiscoveredApp]) -> list[DiscoveredApp]:
+    # Load the applist.json
+    applist_path = Path(__file__).parent / "config" / "applist.json"
+    applist_data = json_to_dict(read_file_as_text(str(applist_path)))
+    steam_apps = applist_data.get("steam_apps", {})
+
     related: list[DiscoveredApp] = []
 
     for app in apps:
@@ -163,7 +165,7 @@ def filter_related_apps(apps: list[DiscoveredApp]) -> list[DiscoveredApp]:
         except ValueError:
             continue
 
-        if appid in :
+        if str(appid) in steam_apps:
             related.append(app)
 
     return related

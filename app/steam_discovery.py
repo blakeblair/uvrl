@@ -165,27 +165,18 @@ def steam_apps_to_discovered(apps: list[SteamApp]) -> list[DiscoveredApp]:
     """
     Convert parsed Steam apps into DiscoveredApp entries
     using steam://run/<appid> URIs.
+
+    Note: Filtering against a curated list happens in discovery.filter_steam_apps.
     """
     discovered: list[DiscoveredApp] = []
 
     for app in apps:
-        info = STEAMAPPS.get(app.appid)
-        confidence = 60
-        tags = []
-
-        if info:
-            confidence = 90
-            tags = info.get("tags", [])
-            name = info.get("name", app.name)
-        else:
-            name = app.name
-
         discovered.append(
             DiscoveredApp(
-                name=name,
+                name=app.name,
                 path=Path(f"steam://run/{app.appid}"),
                 source="steam",
-                confidence=confidence,
+                confidence=60,
             )
         )
 
