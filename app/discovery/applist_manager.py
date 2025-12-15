@@ -47,7 +47,7 @@ def filesystem_search_roots() -> list[Path]:
         platform_env_var = ["UVRL_APPS"]
 
     elif current_platform == OSType.WINDOWS:
-        platform_env_var = ["HOME", "UVRL_APPS", "ProgramFiles", "ProgamFiles(x86)", "LOCALAPPDATA", "PROGAMDATA"]
+        platform_env_var = ["HOME", "UVRL_APPS", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "PROGRAMDATA"]
 
 
     roots.extend([Path(get_env(env)) for env in platform_env_var if get_env(env) is not None])
@@ -150,11 +150,6 @@ def filter_steam_apps(apps: list[DiscoveredApp]) -> list[DiscoveredApp]:
 
 def discover_apps(
 ) -> list[DiscoveredApp]:
-    """
-    Perform full app discovery:
-    - Steam apps (filtered authoritatively by default)
-    - Filesystem apps (broad scan with exclusions)
-    """
     results: list[DiscoveredApp] = []
 
     results.extend(discover_steam_apps())
