@@ -15,10 +15,6 @@ def main():
     steam_apps = find_installed_steam_apps()
     discovered = steam_apps_to_discovered(steam_apps)
 
-    print("Steam-discovered apps:")
-    for app in discovered:
-        print(f"- {app.name} {app.path}")
-
     print("Steam libraries:")
     for lib in find_steam_libraries():
         print("-", lib)
