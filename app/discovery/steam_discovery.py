@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.os import get_os, OSType
-from app.discovery import DiscoveredApp
+from app.utils.os import get_os, OSType
+from app.types import DiscoveredApp
 
 # -------------------------
 # Data structures
@@ -175,8 +175,6 @@ def steam_apps_to_discovered(apps: list[SteamApp]) -> list[DiscoveredApp]:
             DiscoveredApp(
                 name=app.name,
                 path=Path(f"steam://run/{app.appid}"),
-                source="steam",
-                confidence=60,
             )
         )
 

@@ -1,15 +1,11 @@
-from enum import Enum
-from app.sensor import SensorState
+from app.sensors import SensorState
+from app.utils.enums import VRState
 
-
-class VRState(Enum):
-    IDLE = 0
-    VR = 1
 
 
 class StateMachine:
     def __init__(self):
-        self.vr_state = VRState.IDLE
+        self.vr_state = VRState.OUTSIDE_VR
         self._last_sensor_state: SensorState | None = None
 
     def update(self, sensor_state: SensorState):
@@ -23,9 +19,9 @@ class StateMachine:
 
     def _handle_transition(self, prev: SensorState, curr: SensorState):
         if prev == SensorState.CLEAR and curr == SensorState.BLOCKED:
-            self.vr_state = VRState.VR
+            self.vr_state = VRState.INSIDE_VR
             print("Transition: HMD DOCKED → UNDOCKED")
 
         elif prev == SensorState.BLOCKED and curr == SensorState.CLEAR:
-            self.vr_state = VRState.IDLE
+            self.vr_state = VRState.OUTSIDE_VR
             print("Transition: HMD UNDOCKED → DOCKED")

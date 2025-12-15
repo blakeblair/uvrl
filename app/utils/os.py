@@ -1,7 +1,7 @@
-from enum import Enum
+import os
 import platform
+from enum import Enum
 from pathlib import Path
-
 
 class OSType(Enum):
     WINDOWS = "windows"
@@ -56,3 +56,8 @@ def executable_extensions() -> list[str]:
         return [".sh", ".py"]  # ELF handled via executable bit
 
     return []
+
+def get_env (env: str) -> str:
+    return os.environ.get(env)
+
+

@@ -1,33 +1,21 @@
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal
 import os
+from pathlib import Path
+from app.utils import get_os, OSType, get_env, json_to_dict, read_file_as_text
+from app.utils.config import get_default_config
+from app.types import DiscoveredApp
 
-from app.os import get_os, OSType
-from app.steam_discovery import (
-    find_installed_steam_apps,
-    steam_apps_to_discovered,
-    #filter_related_apps,
+
+from app.discovery.steam_discovery import (
+   find_installed_steam_apps,
+   steam_apps_to_discovered,
 )
-from app.util import json_to_dict, read_file_as_text
-
-# -------------------------
-# Data model
-# -------------------------
-
-@dataclass
-class DiscoveredApp:
-    name: str
-    path: Path
-    source: Literal["steam", "filesystem", "manual"]
-    confidence: int
 
 
 # -------------------------
 # Filesystem discovery
 # -------------------------
 
-LAUNCHABLE_EXTENSIONS = {".exe", ".bat", ".cmd", ".ps1", ".py"}
+LAUNCHABLE_EXTENSIONS = {".exe", ".bat", ".cmd", ".ps1", ".py", ".sh"}
 
 EXCLUDED_DIR_NAMES = {
     "windows",
@@ -51,17 +39,18 @@ def filesystem_search_roots() -> list[Path]:
     """
     roots: list[Path] = []
 
-    # User home (recursive)
-    roots.append(Path.home())
 
-    # System install locations
-    roots.extend([
-        Path(os.environ.get("ProgramFiles", "")),
-        Path(os.environ.get("ProgramFiles(x86)", "")),
-        Path(os.environ.get("LOCALAPPDATA", "")),
-        Path(os.environ.get("PROGRAMDATA", "")),
-    ])
+    current_platform = get_os()
 
+    if current_platform == OSType.LINUX:
+
+        platform_env_var = ["UVRL_APPS"]
+
+    elif current_platform == OSType.WINDOWS:
+        platform_env_var = ["HOME", "UVRL_APPS", "ProgramFiles", "ProgamFiles(x86)", "LOCALAPPDATA", "PROGAMDATA"]
+
+
+    roots.extend([Path(get_env(env)) for env in platform_env_var if get_env(env) is not None])
     return [r for r in roots if r.exists()]
 
 
@@ -83,14 +72,14 @@ def should_skip_dir(path: Path, include_documents: bool) -> bool:
 
 
 def discover_filesystem_apps(
-    include_documents: bool = False,
-    max_depth: int = 6,
+    max_depth: int = 3,
 ) -> list[DiscoveredApp]:
     """
     Discover executable or script-based apps from the filesystem.
     """
     discovered: list[DiscoveredApp] = []
 
+    print (filesystem_search_roots())
     for root in filesystem_search_roots():
         for path in root.rglob("*"):
             try:
@@ -102,8 +91,6 @@ def discover_filesystem_apps(
                 continue
 
             if path.is_dir():
-                if should_skip_dir(path, include_documents):
-                    continue
                 continue
 
             if path.suffix.lower() not in LAUNCHABLE_EXTENSIONS:
@@ -112,9 +99,7 @@ def discover_filesystem_apps(
             discovered.append(
                 DiscoveredApp(
                     name=path.stem,
-                    path=path,
-                    source="filesystem",
-                    confidence=40,
+                    path=path
                 )
             )
 
@@ -125,16 +110,12 @@ def discover_filesystem_apps(
 # Steam discovery wrapper
 # -------------------------
 
-def discover_steam_apps(authoritative: bool = True) -> list[DiscoveredApp]:
+def discover_steam_apps() -> list[DiscoveredApp]:
     """
     Discover Steam apps via local Steam metadata.
-    If authoritative is True, only return apps listed in STEAMAPPS.
     """
     steam_apps = find_installed_steam_apps()
     discovered = steam_apps_to_discovered(steam_apps)
-
-    if authoritative:
-        return filter_steam_apps(discovered)
 
     return discovered
 
@@ -145,16 +126,13 @@ def discover_steam_apps(authoritative: bool = True) -> list[DiscoveredApp]:
 
 def filter_steam_apps(apps: list[DiscoveredApp]) -> list[DiscoveredApp]:
     # Load the applist.json
-    applist_path = Path(__file__).parent / "config" / "applist.json"
+    applist_path = get_default_config().app_list_config_path
     applist_data = json_to_dict(read_file_as_text(str(applist_path)))
     steam_apps = applist_data.get("steam_apps", {})
 
     related: list[DiscoveredApp] = []
 
     for app in apps:
-        if app.source != "steam":
-            continue
-
         # Extract AppID from steam://run/<appid>
         path_str = str(app.path)
         if not path_str.startswith("steam://run/"):
@@ -171,8 +149,6 @@ def filter_steam_apps(apps: list[DiscoveredApp]) -> list[DiscoveredApp]:
     return related
 
 def discover_apps(
-    include_documents: bool = False,
-    authoritative_steam: bool = True,
 ) -> list[DiscoveredApp]:
     """
     Perform full app discovery:
@@ -181,7 +157,7 @@ def discover_apps(
     """
     results: list[DiscoveredApp] = []
 
-    results.extend(discover_steam_apps(authoritative=authoritative_steam))
-    results.extend(discover_filesystem_apps(include_documents=include_documents))
+    results.extend(discover_steam_apps())
+    results.extend(discover_filesystem_apps())
 
     return results
