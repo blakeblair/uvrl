@@ -1,0 +1,15 @@
+certifi==2026.5.20
+charset-normalizer==3.4.7
+docutils==0.22.4
+filetype==1.2.0
+idna==3.16
+Kivy==2.3.1
+Kivy-examples==2.3.1
+Kivy-Garden==0.1.5
+packaging==26.2
+pillow==10.4.0
+Pygments==2.20.0
+requests==2.34.2
+setuptools==82.0.1
+urllib3==2.7.0
+wheel==0.47.0
