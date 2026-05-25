@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+kivy_venv/
+data/*.db
+data/*.db-*
+data/config_variants/
+data/config_backups/
+data/config_variant_working/
+data/test_configs/
+data/alternate_variant_exports/
+data/alternate_backup_exports/
