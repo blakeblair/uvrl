@@ -314,6 +314,7 @@ CREATE TABLE IF NOT EXISTS profile_steps (
     -- launch_executable fields
     app_id INTEGER,
     launch_arguments TEXT,
+    launch_argument_mode TEXT NOT NULL DEFAULT 'supplement',
     launch_working_directory TEXT,
 
     -- wait_for_process fields

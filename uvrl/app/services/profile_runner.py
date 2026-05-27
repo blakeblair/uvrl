@@ -15,13 +15,164 @@ from uvrl.app.services.config_backups import restore_config_from_backup
 from uvrl.app.services.database import open_database
 from uvrl.app.services.profile_validation import validate_profile
 from uvrl.app.services.profiles import ProfileStep, list_profile_steps
+from dataclasses import dataclass
 
+@dataclass
+class LaunchArgumentContext:
+    arguments: list[str]
+    mode: str
 
 def _split_args(argument_text: str | None) -> list[str]:
     if not argument_text:
         return []
 
     return shlex.split(argument_text, posix=not sys.platform.startswith("win"))
+
+def _read_desktop_exec_line(desktop_file_path: str) -> str:
+    desktop_path = Path(desktop_file_path).expanduser()
+
+    if not desktop_path.exists():
+        raise FileNotFoundError(f"Desktop file does not exist: {desktop_path}")
+
+    for line in desktop_path.read_text(errors="ignore").splitlines():
+        stripped = line.strip()
+
+        if stripped.startswith("Exec="):
+            return stripped.removeprefix("Exec=").strip()
+
+    raise ValueError(f"Desktop file has no Exec line: {desktop_path}")
+
+
+def _apply_desktop_arguments(
+    exec_line: str,
+    extra_arguments: list[str],
+    mode: str,
+) -> list[str]:
+    command = shlex.split(exec_line, posix=True)
+
+    if not command:
+        raise ValueError("Desktop Exec line produced an empty command.")
+
+    metadata_codes = {
+        "%i",
+        "%c",
+        "%k",
+        "%v",
+        "%m",
+        "%d",
+        "%D",
+        "%n",
+        "%N",
+    }
+
+    argument_codes = {
+        "%f",
+        "%F",
+        "%u",
+        "%U",
+    }
+
+    cleaned: list[str] = []
+    inserted_arguments = False
+
+    for part in command:
+        if part in metadata_codes:
+            continue
+
+        if part in argument_codes:
+            if extra_arguments:
+                cleaned.extend(extra_arguments)
+                inserted_arguments = True
+            continue
+
+        cleaned.append(part.replace("%%", "%"))
+
+    if not extra_arguments:
+        return cleaned
+
+    if mode == "replace":
+        return [cleaned[0], *extra_arguments]
+
+    if not inserted_arguments:
+        cleaned.extend(extra_arguments)
+
+    return cleaned
+
+def _script_interpreter_from_shebang(script_path: Path) -> list[str] | None:
+    try:
+        first_line = script_path.read_text(errors="ignore").splitlines()[0]
+    except (OSError, IndexError):
+        return None
+
+    if not first_line.startswith("#!"):
+        return None
+
+    shebang = first_line.removeprefix("#!").strip()
+
+    if not shebang:
+        return None
+
+    parts = shlex.split(shebang, posix=True)
+
+    if not parts:
+        return None
+
+    executable_name = Path(parts[0]).name
+
+    if executable_name == "env":
+        env_parts = parts[1:]
+
+        if not env_parts:
+            return None
+
+        if env_parts[0] == "-S":
+            return env_parts[1:] or None
+
+        while env_parts and env_parts[0].startswith("-"):
+            env_parts = env_parts[1:]
+
+        return env_parts or None
+
+    return parts
+
+
+def _script_command(script_path_text: str, arguments: list[str]) -> list[str]:
+    script_path = Path(script_path_text).expanduser()
+    suffix = script_path.suffix.lower()
+
+    if suffix == ".py":
+        return [sys.executable, str(script_path), *arguments]
+
+    if suffix in {".sh", ".bash"}:
+        return ["bash", str(script_path), *arguments]
+
+    if suffix == ".zsh":
+        return ["zsh", str(script_path), *arguments]
+
+    if suffix == ".fish":
+        return ["fish", str(script_path), *arguments]
+
+    if suffix == ".ps1":
+        shell_command = "powershell" if sys.platform.startswith("win") else "pwsh"
+        return [shell_command, str(script_path), *arguments]
+
+    if suffix in {".bat", ".cmd"}:
+        if not sys.platform.startswith("win"):
+            raise RuntimeError("Batch files are only supported on Windows.")
+        return [str(script_path), *arguments]
+
+    shebang_command = _script_interpreter_from_shebang(script_path)
+
+    if shebang_command:
+        return [*shebang_command, str(script_path), *arguments]
+
+    if sys.platform.startswith("linux") and os.access(script_path, os.X_OK):
+        return [str(script_path), *arguments]
+
+    raise ValueError(
+        "Could not determine script type. Use a known suffix, add a shebang, " 
+        "or mark the script executable."
+    )
 
 
 def _get_app_row(app_id: int):
@@ -51,7 +202,11 @@ def _get_app_row(app_id: int):
     return row
 
 
-def _launch_executable_step(step: ProfileStep, dry_run: bool) -> None:
+def _launch_executable_step(
+    step: ProfileStep,
+    dry_run: bool,
+    launch_argument_context: dict[int, LaunchArgumentContext],
+) -> None:
     if step.app_id is None:
         raise ValueError("launch_executable step has no app_id.")
 
@@ -64,7 +219,23 @@ def _launch_executable_step(step: ProfileStep, dry_run: bool) -> None:
 
     default_args = _split_args(app["default_arguments"])
     step_args = _split_args(step.launch_arguments)
-    arguments = default_args + step_args
+
+    context = launch_argument_context.get(step.app_id)
+
+    if step_args:
+        context_args = step_args
+        context_mode = "supplement"
+    elif context is not None:
+        context_args = context.arguments
+        context_mode = context.mode
+    else:
+        context_args = []
+        context_mode = "supplement"
+
+    if context_mode == "replace":
+        arguments = context_args
+    else:
+        arguments = default_args + context_args
 
     if launch_kind == "steam_app":
         steam_app_id = app["steam_app_id"]
@@ -93,9 +264,15 @@ def _launch_executable_step(step: ProfileStep, dry_run: bool) -> None:
             raise ValueError(f"Flatpak app [{step.app_id}] has no flatpak_app_id.")
 
         if default_args:
-            command = ["flatpak", *default_args, *step_args]
+            command = ["flatpak", *default_args, *context_args]
         else:
-            command = ["flatpak", "run", str(flatpak_app_id), *step_args]
+            command = ["flatpak", "run", str(flatpak_app_id), *context_args]
+
+    elif launch_kind == "script":
+        if not executable_path:
+            raise ValueError(f"Script app [{step.app_id}] has no executable_path.")
+
+        command = _script_command(str(executable_path), arguments)
 
     elif launch_kind == "python":
         if not executable_path:
@@ -125,11 +302,21 @@ def _launch_executable_step(step: ProfileStep, dry_run: bool) -> None:
 
         command = [str(Path(executable_path).expanduser()), *arguments]
 
-    elif launch_kind == "native":
+    elif launch_kind in {"native", "script"}:
         if not executable_path:
             raise ValueError(f"App [{step.app_id}] has no executable_path.")
 
-        command = [str(Path(executable_path).expanduser()), *arguments]
+        native_path = Path(executable_path).expanduser()
+
+        if sys.platform.startswith("linux") and native_path.suffix.lower() == ".desktop":
+            exec_line = _read_desktop_exec_line(str(native_path))
+            command = _apply_desktop_arguments(
+                exec_line=exec_line,
+                extra_arguments=context_args,
+                mode=context_mode,
+            )
+        else:
+            command = [str(native_path), *arguments]
 
     elif launch_kind == "custom":
         if not executable_path:
@@ -138,12 +325,12 @@ def _launch_executable_step(step: ProfileStep, dry_run: bool) -> None:
         custom_path = Path(executable_path).expanduser()
 
         if sys.platform.startswith("linux") and custom_path.suffix.lower() == ".desktop":
-            if shutil.which("gio"):
-                command = ["gio", "launch", str(custom_path), *arguments]
-            elif shutil.which("xdg-open"):
-                command = ["xdg-open", str(custom_path)]
-            else:
-                raise RuntimeError("Cannot launch .desktop file. Missing gio and xdg-open.")
+            exec_line = _read_desktop_exec_line(str(custom_path))
+            command = _apply_desktop_arguments(
+                exec_line=exec_line,
+                extra_arguments=context_args,
+                mode=context_mode,
+            )
         else:
             command = [str(custom_path), *arguments]
 
@@ -451,14 +638,6 @@ def run_profile(
     dry_run: bool = False,
     backup_export_dir: str | None = None,
 ) -> None:
-    """
-    Run a profile step by step.
-
-    This can overwrite config files, launch executables, wait for processes,
-    delay, and open URLs.
-
-    Elevation is left to the OS and user.
-    """
     validation_ok = _print_validation_issues(profile_id)
 
     if not validation_ok:
@@ -476,6 +655,8 @@ def run_profile(
 
     print(f"Running profile [{profile_id}]")
 
+    launch_argument_context: dict[int, LaunchArgumentContext] = {}
+
     for step in steps:
         if not step.is_enabled:
             print(f"Skipping disabled step [{step.profile_step_id}] #{step.step_order}: {step.action_type}")
@@ -488,8 +669,33 @@ def run_profile(
             if step.action_type == "set_config":
                 _set_config_step(step, dry_run=dry_run, backup_export_dir=backup_export_dir)
 
+            elif step.action_type == "app_args":
+                if step.app_id is None:
+                    raise ValueError("app_args step has no app_id.")
+
+                launch_argument_context[step.app_id] = LaunchArgumentContext(
+                    arguments=_split_args(step.launch_arguments),
+                    mode=step.launch_argument_mode,
+                )
+
+                if dry_run:
+                    print(
+                        "  would set launch arguments for "
+                        f"app [{step.app_id}] mode={step.launch_argument_mode}: "
+                        f"{launch_argument_context[step.app_id].arguments}"
+                    )
+                else:
+                    print(
+                        "  set launch arguments for "
+                        f"app [{step.app_id}] mode={step.launch_argument_mode}"
+                    )
+
             elif step.action_type == "launch_executable":
-                _launch_executable_step(step, dry_run=dry_run)
+                _launch_executable_step(
+                    step,
+                    dry_run=dry_run,
+                    launch_argument_context=launch_argument_context,
+                )
 
             elif step.action_type == "wait_for_process":
                 _wait_for_process_step(step, dry_run=dry_run)
@@ -514,3 +720,4 @@ def run_profile(
             return
 
     print("Profile run complete.")
+

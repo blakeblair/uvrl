@@ -22,6 +22,7 @@ from uvrl.app.services.scanner import run_scan_wizard
 from uvrl.app.services.reset import print_reset_proof, reset_uvrl_runtime_state
 from uvrl.app.services.profiles import (
     add_delay_step,
+    add_app_args_step,
     add_launch_executable_step,
     add_open_url_step,
     add_profile,
@@ -115,6 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="native",
         choices=[
             "native",
+            "script",
             "steam_app",
             "flatpak",
             "python",
@@ -255,6 +257,21 @@ def build_parser() -> argparse.ArgumentParser:
     launch_parser.add_argument("--app-id", required=True, type=int)
     launch_parser.add_argument("--args")
     launch_parser.add_argument("--working-directory")
+
+    app_args_parser = subparsers.add_parser(
+        "profile-step-add-app-args",
+        aliases=["app-args"],
+        help="Set temporary launch arguments for a later app launch step.",
+    )
+    app_args_parser.set_defaults(command="profile-step-add-app-args")
+    add_common_step_arguments(app_args_parser)
+    app_args_parser.add_argument("--app-id", required=True, type=int)
+    app_args_parser.add_argument("--args", required=True)
+    app_args_parser.add_argument(
+        "--mode",
+        default="supplement",
+        choices=["supplement", "replace"],
+    )
 
     wait_parser = subparsers.add_parser(
         "profile-step-add-wait-for-process",
@@ -562,6 +579,19 @@ def main() -> None:
             notes=args.notes,
         )
         print(f"Added set_config profile step [{step_id}]")
+
+    elif args.command == "profile-step-add-app-args":
+        step_id = add_app_args_step(
+            profile_id=args.profile_id,
+            app_id=args.app_id,
+            step_order=args.step_order,
+            step_name=args.name,
+            launch_arguments=args.args,
+            launch_argument_mode=args.mode,
+            failure_behavior=args.failure_behavior,
+            notes=args.notes,
+        )
+        print(f"Added app_args profile step [{step_id}]")
 
     elif args.command == "profile-step-add-launch-executable":
         step_id = add_launch_executable_step(

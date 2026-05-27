@@ -101,6 +101,7 @@ def validate_profile(profile_id: int) -> ProfileValidationResult:
                 config_backup_id,
                 app_id,
                 launch_arguments,
+                launch_argument_mode,
                 launch_working_directory,
                 wait_process_name,
                 wait_process_path,
@@ -285,6 +286,53 @@ def validate_profile(profile_id: int) -> ProfileValidationResult:
                             step_id=step_id,
                             step_order=step_order,
                         )
+
+            elif action_type == "app_args":
+                app_id = step["app_id"]
+                launch_arguments = step["launch_arguments"]
+                launch_argument_mode = str(step["launch_argument_mode"])
+
+                if app_id is None:
+                    _add_error(
+                        issues,
+                        "app_args requires app_id.",
+                        step_id=step_id,
+                        step_order=step_order,
+                    )
+                else:
+                    app = database.execute(
+                        """
+                        SELECT app_id
+                        FROM app_registry
+                        WHERE app_id = ?
+                          AND is_hidden = 0;
+                        """,
+                        (app_id,),
+                    ).fetchone()
+
+                    if app is None:
+                        _add_error(
+                            issues,
+                            f"App [{app_id}] does not exist or is hidden.",
+                            step_id=step_id,
+                            step_order=step_order,
+                        )
+
+                if not launch_arguments:
+                    _add_error(
+                        issues,
+                        "app_args requires launch_arguments.",
+                        step_id=step_id,
+                        step_order=step_order,
+                    )
+
+                if launch_argument_mode not in {"supplement", "replace"}:
+                    _add_error(
+                        issues,
+                        "app_args launch_argument_mode must be supplement or replace.",
+                        step_id=step_id,
+                        step_order=step_order,
+                    )
 
             elif action_type == "wait_for_process":
                 process_name = step["wait_process_name"]

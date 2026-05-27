@@ -33,6 +33,7 @@ class ProfileStep:
     config_backup_id: int | None
     app_id: int | None
     launch_arguments: str | None
+    launch_argument_mode: str
     launch_working_directory: str | None
     wait_process_name: str | None
     wait_process_path: str | None
@@ -315,6 +316,7 @@ def add_launch_executable_step(
                 action_type,
                 app_id,
                 launch_arguments,
+                launch_argument_mode,
                 launch_working_directory,
                 failure_behavior,
                 notes
@@ -335,6 +337,70 @@ def add_launch_executable_step(
 
         return int(cursor.lastrowid)
 
+def add_app_args_step(
+    profile_id: int,
+    app_id: int,
+    launch_arguments: str,
+    launch_argument_mode: str = "supplement",
+    step_order: int | None = None,
+    step_name: str | None = None,
+    failure_behavior: str = "stop_profile",
+    notes: str | None = None,
+) -> int:
+    _ensure_profile_exists(profile_id)
+    _validate_failure_behavior(failure_behavior)
+
+    if launch_argument_mode not in {"supplement", "replace"}:
+        raise ValueError("launch_argument_mode must be supplement or replace.")
+
+    if not launch_arguments:
+        raise ValueError("launch_arguments must not be empty.")
+
+    with open_database() as database:
+        app = database.execute(
+            """
+            SELECT app_id
+            FROM app_registry
+            WHERE app_id = ?
+              AND is_hidden = 0;
+            """,
+            (app_id,),
+        ).fetchone()
+
+    if app is None:
+        raise ValueError(f"No active app found with ID {app_id}")
+
+    resolved_order = _resolve_step_order(profile_id, step_order)
+
+    with open_database() as database:
+        cursor = database.execute(
+            """
+            INSERT INTO profile_steps (
+                profile_id,
+                step_order,
+                step_name,
+                action_type,
+                app_id,
+                launch_arguments,
+                launch_argument_mode,
+                failure_behavior,
+                notes
+            )
+            VALUES (?, ?, ?, 'app_args', ?, ?, ?, ?, ?);
+            """,
+            (
+                profile_id,
+                resolved_order,
+                step_name,
+                app_id,
+                launch_arguments,
+                launch_argument_mode,
+                failure_behavior,
+                notes,
+            ),
+        )
+
+        return int(cursor.lastrowid)
 
 def add_wait_for_process_step(
     profile_id: int,
@@ -493,6 +559,8 @@ def list_profile_steps(profile_id: int) -> list[ProfileStep]:
                 config_backup_id,
                 app_id,
                 launch_arguments,
+                launch_argument_mode,
+                launch_argument_mode,
                 launch_working_directory,
                 wait_process_name,
                 wait_process_path,
@@ -522,6 +590,7 @@ def list_profile_steps(profile_id: int) -> list[ProfileStep]:
             config_backup_id=row["config_backup_id"],
             app_id=row["app_id"],
             launch_arguments=row["launch_arguments"],
+            launch_argument_mode=str(row["launch_argument_mode"]),
             launch_working_directory=row["launch_working_directory"],
             wait_process_name=row["wait_process_name"],
             wait_process_path=row["wait_process_path"],
@@ -561,6 +630,13 @@ def print_profile_steps(profile_id: int) -> None:
 
             if step.config_backup_id is not None:
                 print(f"  backup:    {step.config_backup_id}")
+
+        elif step.action_type == "app_args":
+            print(f"  app_id:    {step.app_id}")
+            print(f"  mode:      {step.launch_argument_mode}")
+
+            if step.launch_arguments:
+                print(f"  args:      {step.launch_arguments}")
 
         elif step.action_type == "launch_executable":
             print(f"  app_id:    {step.app_id}")
@@ -685,6 +761,17 @@ def move_profile_step(
             insert_index = before_index
 
         ordered_step_ids.insert(insert_index, step_id)
+
+        for index, profile_step_id in enumerate(ordered_step_ids, start=1):
+            database.execute(
+                """
+                UPDATE profile_steps
+                SET step_order = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE profile_step_id = ?;
+                """,
+                (-index, profile_step_id),
+            )
 
         for index, profile_step_id in enumerate(ordered_step_ids, start=1):
             database.execute(
