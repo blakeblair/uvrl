@@ -175,6 +175,95 @@ def _script_command(script_path_text: str, arguments: list[str]) -> list[str]:
     )
 
 
+def _app_output_log_path(display_name: str) -> Path:
+    safe_name = "".join(
+        character.lower() if character.isalnum() else "-"
+        for character in display_name
+    ).strip("-")
+
+    if not safe_name:
+        safe_name = "app"
+
+    log_dir = Path.home() / "Documents" / "UVRL Logs" / "app-output"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    return log_dir / f"{safe_name}-{timestamp}.log"
+
+
+def _terminal_launcher_command(command: list[str], display_name: str) -> list[str] | None:
+    title = f"UVRL - {display_name}"
+
+    if sys.platform.startswith("linux"):
+        if shutil.which("ptyxis"):
+            return ["ptyxis", "--new-window", "--title", title, "--", *command]
+
+        if shutil.which("gnome-terminal"):
+            return ["gnome-terminal", f"--title={title}", "--", *command]
+
+        if shutil.which("konsole"):
+            return ["konsole", "--new-tab", "-p", f"tabtitle={title}", "-e", *command]
+
+        if shutil.which("xterm"):
+            return ["xterm", "-T", title, "-e", *command]
+
+    return None
+
+
+def _launch_mode_for_app(
+    launch_kind: str,
+    executable_path: str | None,
+) -> str:
+    if launch_kind in {"script", "python", "bash", "powershell", "batch"}:
+        return "terminal"
+
+    return "detached"
+
+
+def _launch_command(
+    command: list[str],
+    working_directory: str | None,
+    display_name: str,
+    launch_mode: str,
+) -> None:
+    cwd = working_directory if working_directory else None
+
+    if launch_mode == "terminal":
+        terminal_command = _terminal_launcher_command(command, display_name)
+
+        if terminal_command:
+            subprocess.Popen(
+                terminal_command,
+                cwd=cwd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=not sys.platform.startswith("win"),
+            )
+
+            print(f"  launched {display_name} in separate terminal: {command}")
+            return
+
+        print("  no supported terminal emulator found. Falling back to detached app log.")
+
+    log_path = _app_output_log_path(display_name)
+
+    with log_path.open("ab") as log_file:
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        log_file.write(bytes([10]))
+        header_text = "===== Starting {} at {} =====".format(display_name, timestamp)
+        log_file.write((header_text + chr(10)).encode("utf-8"))
+
+        subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=not sys.platform.startswith("win"),
+        )
+
+    print(f"  launched {display_name}: {command}")
+    print(f"  app output log: {log_path}")
+
 def _get_app_row(app_id: int):
     with open_database() as database:
         row = database.execute(
@@ -216,6 +305,20 @@ def _launch_executable_step(
     launch_kind = str(app["launch_kind"])
     executable_path = app["executable_path"]
     working_directory = step.launch_working_directory or app["working_directory"]
+
+    if step.wait_process_name or step.wait_process_path:
+        if dry_run:
+            print(
+                "  would skip launch if process is already detected: "
+                f"name={step.wait_process_name!r}, path={step.wait_process_path!r}"
+            )
+        elif _process_detected(step.wait_process_name, step.wait_process_path):
+            print(
+                "  process already detected. Skipping launch: "
+                f"name={step.wait_process_name!r}, path={step.wait_process_path!r}"
+            )
+            return
+
 
     default_args = _split_args(app["default_arguments"])
     step_args = _split_args(step.launch_arguments)
@@ -337,20 +440,29 @@ def _launch_executable_step(
     else:
         raise ValueError(f"Unsupported launch_kind for app [{step.app_id}]: {launch_kind}")
 
+    launch_mode = _launch_mode_for_app(
+        launch_kind=launch_kind,
+        executable_path=executable_path,
+    )
+
     if dry_run:
         print(f"  would launch {display_name}: {command}")
+        print(f"  launch mode: {launch_mode}")
+
+        if launch_mode == "detached":
+            print("  app output: separate app-output log")
 
         if working_directory:
             print(f"  working directory: {working_directory}")
 
         return
 
-    subprocess.Popen(
-        command,
-        cwd=working_directory if working_directory else None,
+    _launch_command(
+        command=command,
+        working_directory=working_directory,
+        display_name=display_name,
+        launch_mode=launch_mode,
     )
-
-    print(f"  launched {display_name}: {command}")
 
 
 def _linux_process_detected(
@@ -587,12 +699,43 @@ def _delay_step(step: ProfileStep, dry_run: bool) -> None:
     if step.delay_seconds is None:
         raise ValueError("delay step has no delay_seconds.")
 
+    process_name = step.wait_process_name
+    process_path = step.wait_process_path
+
     if dry_run:
-        print(f"  would delay for {step.delay_seconds} seconds")
+        if process_name or process_path:
+            print(
+                "  would delay for "
+                f"{step.delay_seconds} seconds unless process is detected: "
+                f"name={process_name!r}, path={process_path!r}"
+            )
+        else:
+            print(f"  would delay for {step.delay_seconds} seconds")
         return
 
-    print(f"  delaying for {step.delay_seconds} seconds")
-    time.sleep(step.delay_seconds)
+    if not process_name and not process_path:
+        print(f"  delaying for {step.delay_seconds} seconds")
+        time.sleep(step.delay_seconds)
+        return
+
+    print(
+        "  delaying for "
+        f"{step.delay_seconds} seconds unless process is detected: "
+        f"name={process_name!r}, path={process_path!r}"
+    )
+
+    deadline = time.monotonic() + step.delay_seconds
+
+    while True:
+        if _process_detected(process_name, process_path):
+            print("  process detected. Skipping remaining delay.")
+            return
+
+        if step.delay_seconds == 0 or time.monotonic() >= deadline:
+            print("  delay completed.")
+            return
+
+        time.sleep(1)
 
 
 def _open_url_step(step: ProfileStep, dry_run: bool) -> None:
